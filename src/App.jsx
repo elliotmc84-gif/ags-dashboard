@@ -9,7 +9,7 @@ const C = {
   bg: "#0D1117", surface: "#161B22", border: "#21262D",
   accent: "#2563EB", accentLt: "#3B82F6",
   text: "#E6EDF3", textSub: "#8B949E",
-  green: "#3FB950", red: "#F85149",
+  green: "#3FB950", red: "#F85149", amber: "#D29922",
   actual: "#3B82F6", budget: "#8B5CF6", py: "#F59E0B",
 };
 
@@ -23,80 +23,53 @@ const fmtK = v => {
   return sign + "€" + Math.round(abs);
 };
 
-function serialToYearMonth(serial) {
-  if (!serial || isNaN(serial)) return null;
-  const date = new Date(Math.round((serial - 25569) * 86400 * 1000));
-  const y = date.getUTCFullYear();
-  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
-}
-
-function parseMgmtAccount(wb) {
-  const ws = wb.Sheets["SUMMARY"];
-  if (!ws) throw new Error("No SUMMARY sheet found");
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
-
-  // Branch name
-  let branchRaw = "";
-  for (let i = 0; i < Math.min(10, rows.length); i++) {
-    for (const cell of rows[i]) {
-      if (typeof cell === "string" && cell.includes("AGS") && cell.includes("|")) {
-        branchRaw = cell.trim(); break;
-      }
-    }
-    if (branchRaw) break;
-  }
-  let branchName = branchRaw;
-  const cityMatch = branchRaw.match(/AGS\s+([A-Z\s]+)\s*\(/i);
-  if (cityMatch) {
-    branchName = "AGS " + cityMatch[1].trim().split(" ")
-      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
-  }
-
-  // Period
-  let period = null;
-  for (let i = 0; i < Math.min(12, rows.length); i++) {
-    for (const cell of rows[i]) {
-      if (typeof cell === "number" && cell > 40000 && cell < 55000) {
-        period = serialToYearMonth(cell); break;
-      }
-    }
-    if (period) break;
-  }
-
-  // Find row by label and extract Actual/Budget/PY YTD
-  const extractRow = (label) => {
-    for (const row of rows) {
-      for (const cell of row) {
-        if (typeof cell === "string" && cell.trim().toUpperCase().includes(label.toUpperCase())) {
-          const nums = row.filter(v => typeof v === "number" && Math.abs(v) > 1);
-          return { actual: nums[0] ?? null, budget: nums[2] ?? null, py: nums[4] ?? null };
-        }
-      }
-    }
-    return { actual: null, budget: null, py: null };
+// Parse the dashboard Excel template
+// Actuals sheet: Branch | Month (YYYY-MM) | Revenue | Cost | GM | GM% | Current Topics
+// Budget sheet:  Branch | Month (YYYY-MM) | Revenue_Budget | Cost_Budget | GM_Budget
+function parseDashboardExcel(wb) {
+  const toRows = name => {
+    const ws = wb.Sheets[name];
+    if (!ws) return [];
+    return XLSX.utils.sheet_to_json(ws, { defval: null });
   };
 
-  const revenue  = extractRow("TURNOVER");
-  const gm       = extractRow("GROSS MARGIN");
-  const opResult = extractRow("OPERATIONAL RESULT");
+  const actRows = toRows("Actuals");
+  const budRows = toRows("Budget");
 
-  const cost = {
-    actual: revenue.actual != null && gm.actual != null ? revenue.actual - gm.actual : null,
-    budget: revenue.budget != null && gm.budget != null ? revenue.budget - gm.budget : null,
-    py:     revenue.py     != null && gm.py     != null ? revenue.py     - gm.py     : null,
-  };
+  if (!actRows.length) throw new Error("No data found in the Actuals sheet.");
 
-  return { branch: branchName, period, revenue, gm, cost, opResult, importedAt: new Date().toISOString() };
-}
+  const clean = v => (typeof v === "string" ? v.trim() : v);
 
-// Persistent storage
-const STORE_KEY = "ags-records-v1";
-function loadLocal() {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch { return {}; }
-}
-function saveLocal(data) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); } catch {}
+  const actuals = actRows.map(row => {
+    const keys = Object.keys(row);
+    const get = (...hints) => {
+      const k = keys.find(k => hints.some(h => k.toLowerCase().replace(/[^a-z]/g,"").includes(h.toLowerCase().replace(/[^a-z]/g,""))));
+      return k ? clean(row[k]) : null;
+    };
+    const branch  = get("Branch");
+    const month   = get("Month");
+    const revenue = Number(get("Revenue") || 0);
+    const cost    = Number(get("Cost") || 0);
+    const gm      = Number(get("GrossMargin","Gross") || revenue - cost);
+    const topics  = get("CurrentTopics","Topics","Current") || "";
+    return { branch: String(branch||"").trim(), month: String(month||"").trim(), revenue, cost, gm, topics };
+  }).filter(r => r.branch && r.month);
+
+  const budget = budRows.map(row => {
+    const keys = Object.keys(row);
+    const get = (...hints) => {
+      const k = keys.find(k => hints.some(h => k.toLowerCase().replace(/[^a-z]/g,"").includes(h.toLowerCase().replace(/[^a-z]/g,""))));
+      return k ? clean(row[k]) : null;
+    };
+    const branch  = get("Branch");
+    const month   = get("Month");
+    const revenue = Number(get("RevenueBudget","Revenue") || 0);
+    const cost    = Number(get("CostBudget","Cost") || 0);
+    const gm      = Number(get("GrossMarginBudget","GrossMargin","Gross") || revenue - cost);
+    return { branch: String(branch||"").trim(), month: String(month||"").trim(), revenue, cost, gm };
+  }).filter(r => r.branch && r.month);
+
+  return { actuals, budget };
 }
 
 function KpiCard({ label, value, sub, delta }) {
@@ -149,48 +122,41 @@ function ChartTooltip({ active, payload, label }) {
 }
 
 export default function App() {
-  const [records, setRecords]     = useState(() => loadLocal());
-  const [query, setQuery]         = useState("");
-  const [branch, setBranch]       = useState(null);
-  const [suggestions, setSugg]    = useState([]);
-  const [metric, setMetric]       = useState("gm");
-  const [dragging, setDragging]   = useState(false);
-  const [toast, setToast]         = useState(null);
-  const [view, setView]           = useState("dashboard"); // dashboard | overview
+  const [data, setData]         = useState(null);
+  const [fileName, setFileName] = useState(null);
+  const [query, setQuery]       = useState("");
+  const [branch, setBranch]     = useState(null);
+  const [suggestions, setSugg]  = useState([]);
+  const [metric, setMetric]     = useState("gm");
+  const [dragging, setDragging] = useState(false);
+  const [error, setError]       = useState(null);
+  const [view, setView]         = useState("dashboard");
 
-  const showToast = (msg, type = "ok") => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3500);
-  };
-
-  const ingestFiles = useCallback(async (files) => {
-    let current = loadLocal();
-    let ok = 0, errs = [];
-    for (const file of files) {
-      try {
-        const buf = await file.arrayBuffer();
-        const wb = XLSX.read(buf, { type: "array" });
-        const parsed = parseMgmtAccount(wb);
-        if (!parsed.branch || !parsed.period) throw new Error("Could not read branch or period");
-        if (!current[parsed.branch]) current[parsed.branch] = {};
-        current[parsed.branch][parsed.period] = parsed;
-        ok++;
-      } catch (e) { errs.push(`${file.name}: ${e.message}`); }
+  const ingestFile = useCallback(async (file) => {
+    setError(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const parsed = parseDashboardExcel(wb);
+      setData(parsed);
+      setFileName(file.name);
+      setBranch(null);
+      setQuery("");
+    } catch (e) {
+      setError(e.message || "Could not read file. Make sure it's the AGS Dashboard Excel.");
     }
-    saveLocal(current);
-    setRecords({ ...current });
-    if (ok && !errs.length) showToast(`${ok} file${ok > 1 ? "s" : ""} imported`);
-    else if (ok) showToast(`${ok} imported, ${errs.length} failed`, "warn");
-    else showToast(errs[0] || "Import failed", "err");
   }, []);
 
   const onDrop = useCallback(e => {
     e.preventDefault(); setDragging(false);
-    const files = [...e.dataTransfer.files].filter(f => /\.xlsm?$/i.test(f.name));
-    if (files.length) ingestFiles(files);
-  }, [ingestFiles]);
+    const file = e.dataTransfer.files[0];
+    if (file) ingestFile(file);
+  }, [ingestFile]);
 
-  const allBranches = useMemo(() => Object.keys(records).sort(), [records]);
+  const allBranches = useMemo(() => {
+    if (!data) return [];
+    return [...new Set(data.actuals.map(r => r.branch))].sort();
+  }, [data]);
 
   const onQueryChange = e => {
     const v = e.target.value;
@@ -205,52 +171,81 @@ export default function App() {
   const selectBranch = b => { setQuery(b); setBranch(b); setSugg([]); setView("dashboard"); };
 
   const dashboard = useMemo(() => {
-    if (!branch || !records[branch]) return null;
-    const branchData = records[branch];
-    const periods = Object.keys(branchData).sort();
-    const latest = periods[periods.length - 1];
-    const rec = branchData[latest];
+    if (!data || !branch) return null;
+    const actRows = data.actuals.filter(r => r.branch === branch);
+    const budRows = data.budget.filter(r => r.branch === branch);
+
+    const months = actRows.map(r => r.month).sort();
+    const latestMonth = months[months.length - 1] || "";
+    const currentYear = latestMonth.slice(0, 4) || String(new Date().getFullYear());
+    const priorYear   = String(Number(currentYear) - 1);
+
+    const cyRows = actRows.filter(r => r.month.startsWith(currentYear));
+    const pyRows = actRows.filter(r => r.month.startsWith(priorYear));
+    const cyBud  = budRows.filter(r => r.month.startsWith(currentYear));
+
+    const sum = (rows, key) => rows.reduce((acc, r) => acc + (Number(r[key]) || 0), 0);
 
     const ytd = {
-      revenue: rec.revenue?.actual,
-      gm: rec.gm?.actual,
-      cost: rec.cost?.actual,
-      opResult: rec.opResult?.actual,
+      revenue: sum(cyRows, "revenue"),
+      cost:    sum(cyRows, "cost"),
+      gm:      sum(cyRows, "gm"),
     };
     ytd.gmPct = ytd.revenue ? ytd.gm / ytd.revenue : 0;
 
-    const bud = { revenue: rec.revenue?.budget, gm: rec.gm?.budget };
-    const py  = { revenue: rec.revenue?.py,     gm: rec.gm?.py };
+    const bud = { revenue: sum(cyBud, "revenue"), gm: sum(cyBud, "gm") };
+    const py  = { revenue: sum(pyRows, "revenue"), gm: sum(pyRows, "gm") };
 
-    const chartData = periods.map(p => {
-      const r = branchData[p];
-      return {
-        month: p.slice(5),
-        actual: r.gm?.actual, budget: r.gm?.budget, py: r.gm?.py,
-        actualRev: r.revenue?.actual, budgetRev: r.revenue?.budget, pyRev: r.revenue?.py,
-        actualCost: r.cost?.actual,
+    const monthMap = {};
+    cyRows.forEach(r => {
+      monthMap[r.month] = {
+        ...monthMap[r.month],
+        actual: r.gm, actualRev: r.revenue, actualCost: r.cost,
+        topics: r.topics
       };
     });
+    cyBud.forEach(r => {
+      monthMap[r.month] = { ...monthMap[r.month], budget: r.gm, budgetRev: r.revenue };
+    });
+    pyRows.forEach(r => {
+      const key = currentYear + r.month.slice(4);
+      monthMap[key] = { ...monthMap[key], py: r.gm, pyRev: r.revenue };
+    });
 
-    return { ytd, bud, py, chartData, latest, periods };
-  }, [branch, records]);
+    const chartData = Object.entries(monthMap)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([month, vals]) => ({ month: month.slice(5), ...vals }));
 
-  const overviewRows = useMemo(() => allBranches.map(b => {
-    const periods = Object.keys(records[b]).sort();
-    const latest = periods[periods.length - 1];
-    const rec = records[b][latest];
-    const rev = rec.revenue?.actual;
-    const gm  = rec.gm?.actual;
-    const bud = rec.revenue?.budget;
-    return { branch: b, latest, rev, gm, gmPct: rev ? gm / rev : 0, vsBud: bud != null ? rev - bud : null };
-  }), [allBranches, records]);
+    const latestRow = [...cyRows].sort((a,b) => b.month.localeCompare(a.month))[0];
+    const topics = latestRow?.topics
+      ? latestRow.topics.split(";").map(t => t.trim()).filter(Boolean)
+      : [];
+
+    return { ytd, bud, py, chartData, topics, currentYear, latestMonth };
+  }, [data, branch]);
+
+  const overviewRows = useMemo(() => {
+    if (!data) return [];
+    return allBranches.map(b => {
+      const actRows = data.actuals.filter(r => r.branch === b);
+      const budRows = data.budget.filter(r => r.branch === b);
+      const months = actRows.map(r => r.month).sort();
+      const latest = months[months.length - 1] || "";
+      const currentYear = latest.slice(0, 4);
+      const cyRows = actRows.filter(r => r.month.startsWith(currentYear));
+      const cyBud  = budRows.filter(r => r.month.startsWith(currentYear));
+      const sum = (rows, key) => rows.reduce((acc, r) => acc + (Number(r[key]) || 0), 0);
+      const rev = sum(cyRows, "revenue");
+      const gm  = sum(cyRows, "gm");
+      const bud = sum(cyBud, "revenue");
+      return { branch: b, latest, rev, gm, gmPct: rev ? gm / rev : 0, vsBud: bud ? rev - bud : null };
+    });
+  }, [data, allBranches]);
 
   const metricKeys = metric === "gm" ? ["actual","budget","py"]
     : metric === "revenue" ? ["actualRev","budgetRev","pyRev"]
     : ["actualCost"];
   const metricLabel = metric === "gm" ? "Gross Margin" : metric === "revenue" ? "Revenue" : "Cost";
-
-  const hasData = allBranches.length > 0;
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'Segoe UI',sans-serif", paddingBottom: 80 }}>
@@ -263,19 +258,6 @@ export default function App() {
         .mbtn:hover { opacity: 0.8; }
       `}</style>
 
-      {/* Toast */}
-      {toast && (
-        <div style={{
-          position: "fixed", top: 16, right: 16, zIndex: 999,
-          background: toast.type === "err" ? "#3d1a1a" : toast.type === "warn" ? "#2d2010" : "#1a3323",
-          border: `1px solid ${toast.type === "err" ? C.red : toast.type === "warn" ? C.amber : C.green}`,
-          color: C.text, borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 500,
-          boxShadow: "0 4px 20px rgba(0,0,0,0.4)"
-        }}>
-          {toast.msg}
-        </div>
-      )}
-
       {/* Header */}
       <div style={{
         background: C.surface, borderBottom: `1px solid ${C.border}`,
@@ -287,7 +269,7 @@ export default function App() {
           <div style={{ fontSize: 15, fontWeight: 700 }}>AGS Network</div>
           <div style={{ fontSize: 10, color: C.textSub, letterSpacing: "0.06em", textTransform: "uppercase" }}>Branch Dashboard</div>
         </div>
-        {hasData && (
+        {data && (
           <div style={{ display: "flex", gap: 6 }}>
             {["dashboard","overview"].map(v => (
               <button key={v} className="mbtn" onClick={() => setView(v)} style={{
@@ -300,19 +282,20 @@ export default function App() {
           </div>
         )}
         <label style={{
-          background: C.accent, color: "#fff", padding: "7px 14px",
-          borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0
+          background: data ? C.border : C.accent,
+          color: data ? C.textSub : "#fff",
+          padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0
         }}>
-          + Upload
-          <input type="file" accept=".xlsx,.xlsm" multiple style={{ display: "none" }}
-            onChange={e => { ingestFiles([...e.target.files]); e.target.value = ""; }} />
+          {data ? "↺ Replace" : "+ Load Excel"}
+          <input type="file" accept=".xlsx,.xlsm" style={{ display: "none" }}
+            onChange={e => { if (e.target.files[0]) ingestFile(e.target.files[0]); e.target.value = ""; }} />
         </label>
       </div>
 
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 16px 0" }}>
 
-        {/* Drop zone (only when no data) */}
-        {!hasData && (
+        {/* Drop zone */}
+        {!data && (
           <div
             onDragOver={e => { e.preventDefault(); setDragging(true); }}
             onDragLeave={() => setDragging(false)}
@@ -323,31 +306,60 @@ export default function App() {
               background: dragging ? "#0d1f3c" : C.surface,
             }}
           >
-            <div style={{ fontSize: 36, marginBottom: 12 }}>📂</div>
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>Drop management account files here</div>
-            <div style={{ color: C.textSub, fontSize: 13 }}>Accepts .xlsm and .xlsx — upload one or multiple at once</div>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>📊</div>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>Drop your AGS Dashboard Excel here</div>
+            <div style={{ color: C.textSub, fontSize: 13, marginBottom: 20 }}>
+              The dashboard template with Actuals and Budget sheets
+            </div>
+            <label style={{
+              display: "inline-block", background: C.accent, color: "#fff",
+              padding: "10px 24px", borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: "pointer"
+            }}>
+              Browse file
+              <input type="file" accept=".xlsx,.xlsm" style={{ display: "none" }}
+                onChange={e => { if (e.target.files[0]) ingestFile(e.target.files[0]); e.target.value = ""; }} />
+            </label>
           </div>
         )}
 
-        {/* Overview table */}
-        {hasData && view === "overview" && (
+        {error && (
+          <div style={{
+            marginTop: 12, background: "#3d1a1a", border: `1px solid ${C.red}`,
+            borderRadius: 8, padding: "12px 16px", color: C.red, fontSize: 13
+          }}>{error}</div>
+        )}
+
+        {/* File loaded indicator */}
+        {data && fileName && (
+          <div style={{
+            marginBottom: 20, display: "flex", alignItems: "center", gap: 8,
+            fontSize: 12, color: C.textSub
+          }}>
+            <span style={{ color: C.green }}>●</span>
+            <span>{fileName} — {allBranches.length} branch{allBranches.length !== 1 ? "es" : ""}</span>
+          </div>
+        )}
+
+        {/* Overview */}
+        {data && view === "overview" && (
           <div>
-            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>
-              Network overview — {allBranches.length} branch{allBranches.length !== 1 ? "es" : ""} loaded
-            </div>
+            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Network overview</div>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                    {["Branch","Period","Revenue YTD","GM YTD","GM %","vs Budget"].map(h => (
-                      <th key={h} style={{ padding: "12px 16px", color: C.textSub, fontWeight: 600, textAlign: h === "Branch" ? "left" : "right", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
+                    {["Branch","Latest","Revenue YTD","GM YTD","GM %","vs Budget"].map(h => (
+                      <th key={h} style={{
+                        padding: "12px 16px", color: C.textSub, fontWeight: 600,
+                        textAlign: h === "Branch" ? "left" : "right",
+                        fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em"
+                      }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {overviewRows.map((r, i) => (
-                    <tr key={r.branch} className="row-hover"
-                      onClick={() => selectBranch(r.branch)}
+                    <tr key={r.branch} className="row-hover" onClick={() => selectBranch(r.branch)}
                       style={{ borderBottom: i < overviewRows.length - 1 ? `1px solid ${C.border}` : "none", background: "transparent", transition: "background 0.15s" }}>
                       <td style={{ padding: "12px 16px", fontWeight: 600 }}>{r.branch}</td>
                       <td style={{ padding: "12px 16px", color: C.textSub, textAlign: "right" }}>{r.latest}</td>
@@ -369,10 +381,9 @@ export default function App() {
           </div>
         )}
 
-        {/* Dashboard view */}
-        {hasData && view === "dashboard" && (
+        {/* Dashboard */}
+        {data && view === "dashboard" && (
           <>
-            {/* Search */}
             <div style={{ position: "relative", maxWidth: 440, marginBottom: 28 }}>
               <div style={{ position: "absolute", left: 13, top: "50%", transform: "translateY(-50%)", color: C.textSub, fontSize: 16, pointerEvents: "none" }}>⌕</div>
               <input value={query} onChange={onQueryChange} placeholder="Type a branch name..."
@@ -396,13 +407,10 @@ export default function App() {
               )}
             </div>
 
-            {/* Branch chips */}
             {!branch && (
               <div style={{ textAlign: "center", padding: "40px 0", color: C.textSub }}>
                 <div style={{ fontSize: 28, marginBottom: 10 }}>🔍</div>
-                <div style={{ fontSize: 13, marginBottom: 16 }}>
-                  {allBranches.length} branch{allBranches.length !== 1 ? "es" : ""} loaded — select one to view
-                </div>
+                <div style={{ fontSize: 13, marginBottom: 16 }}>Select a branch to view its dashboard</div>
                 <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
                   {allBranches.map(b => (
                     <span key={b} className="chip" onClick={() => selectBranch(b)}
@@ -414,25 +422,22 @@ export default function App() {
               </div>
             )}
 
-            {/* Dashboard */}
             {dashboard && branch && (
               <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-
                 <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
                   <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>{branch}</h2>
-                  <span style={{ color: C.textSub, fontSize: 13 }}>YTD to {dashboard.latest}</span>
+                  <span style={{ color: C.textSub, fontSize: 13 }}>YTD {dashboard.currentYear} to {dashboard.latestMonth}</span>
                 </div>
 
-                {/* KPIs */}
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <KpiCard label="Revenue YTD" value={fmtK(dashboard.ytd.revenue)}
                     sub={dashboard.bud.revenue ? `Budget: ${fmtK(dashboard.bud.revenue)}` : null}
-                    delta={dashboard.bud.revenue != null ? dashboard.ytd.revenue - dashboard.bud.revenue : null} />
+                    delta={dashboard.bud.revenue ? dashboard.ytd.revenue - dashboard.bud.revenue : null} />
                   <KpiCard label="Gross Margin" value={fmtK(dashboard.ytd.gm)}
                     sub={dashboard.bud.gm ? `Budget: ${fmtK(dashboard.bud.gm)}` : null}
-                    delta={dashboard.bud.gm != null ? dashboard.ytd.gm - dashboard.bud.gm : null} />
+                    delta={dashboard.bud.gm ? dashboard.ytd.gm - dashboard.bud.gm : null} />
                   <KpiCard label="GM %" value={fmtPct(dashboard.ytd.gmPct)} />
-                  {dashboard.py.revenue != null && (
+                  {dashboard.py.revenue > 0 && (
                     <KpiCard label="Revenue vs PY"
                       value={fmtK(dashboard.ytd.revenue - dashboard.py.revenue)}
                       sub={`PY: ${fmtK(dashboard.py.revenue)}`}
@@ -440,11 +445,10 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Chart */}
                 {dashboard.chartData.length > 1 && (
                   <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 16px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>Monthly trend (YTD)</div>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>Monthly trend</div>
                       <div style={{ display: "flex", gap: 6 }}>
                         {[["gm","GM"],["revenue","Revenue"],["cost","Cost"]].map(([m, lbl]) => (
                           <button key={m} className="mbtn" onClick={() => setMetric(m)} style={{
@@ -479,18 +483,23 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Single period note */}
-                {dashboard.chartData.length === 1 && (
-                  <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 16px", color: C.textSub, fontSize: 13 }}>
-                    Chart will appear once you upload more than one period for this branch.
+                {dashboard.topics.length > 0 && (
+                  <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 16px" }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 14 }}>Current topics</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {dashboard.topics.map((t, i) => (
+                        <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                          <div style={{ width: 6, height: 6, background: C.accentLt, borderRadius: "50%", marginTop: 6, flexShrink: 0 }} />
+                          <div style={{ fontSize: 13, color: C.text, lineHeight: 1.6 }}>{t}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
-
               </div>
             )}
           </>
         )}
-
       </div>
     </div>
   );
