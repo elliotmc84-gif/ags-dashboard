@@ -452,9 +452,9 @@ export default function App() {
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                   {[
                     { label: "Revenue YTD",   value: fmtK(regionalTotals.rev),  delta: regionalTotals.vsBudRev,  deltaPy: regionalTotals.pyRev  ? regionalTotals.rev  - regionalTotals.pyRev  : null, sub: regionalTotals.pyRev  ? `PY: ${fmtK(regionalTotals.pyRev)}`   : null, pct: false },
-                    { label: "Fixed Cost YTD",value: fmtK(regionalTotals.cost), delta: regionalTotals.vsBudCost, deltaPy: regionalTotals.pyCost ? regionalTotals.cost - regionalTotals.pyCost : null, sub: regionalTotals.pyCost ? `PY: ${fmtK(regionalTotals.pyCost)}`  : null, pct: false },
+                    { label: "Fixed Cost YTD", value: fmtK(regionalTotals.cost), delta: regionalTotals.vsBudCost, deltaPy: regionalTotals.pyCost ? regionalTotals.cost - regionalTotals.pyCost : null, sub: regionalTotals.pyCost ? `PY: ${fmtK(regionalTotals.pyCost)}` : null, pct: false, invert: true },
                     { label: "GM %", value: fmtPct(regionalTotals.gmPct), delta: regionalTotals.budGmPct ? regionalTotals.gmPct - regionalTotals.budGmPct : null, deltaPy: regionalTotals.pyGmPct ? regionalTotals.gmPct - regionalTotals.pyGmPct : null, sub: regionalTotals.budGmPct ? `Budget: ${fmtPct(regionalTotals.budGmPct)}` : null, pct: true },
-                  ].map(({ label, value, delta, deltaPy, sub, pct }) => (
+                  ].map(({ label, value, delta, deltaPy, sub, pct, invert }) => (
                     <div key={label} style={{
                       flex: 1, minWidth: 130, background: C.bg,
                       border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px"
@@ -466,9 +466,9 @@ export default function App() {
                         <div style={{ marginTop: 5 }}>
                           <span style={{
                             fontSize: 11, fontWeight: 600,
-                            color: delta >= 0 ? C.green : C.red,
-                            background: delta >= 0 ? "#E8F5EC" : "#FDECEA",
-                            padding: "2px 6px", borderRadius: 4
+                            color: (invert ? delta <= 0 : delta >= 0) ? C.green : C.red,
+                            background: (invert ? delta <= 0 : delta >= 0) ? "#E8F5EC" : "#FDECEA",
+                            padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap"
                           }}>
                             {delta >= 0 ? "▲" : "▼"} {pct ? fmtPct(Math.abs(delta)) : fmtK(Math.abs(delta))} vs bud
                           </span>
@@ -478,9 +478,9 @@ export default function App() {
                         <div style={{ marginTop: 4 }}>
                           <span style={{
                             fontSize: 11, fontWeight: 600,
-                            color: deltaPy >= 0 ? C.green : C.red,
-                            background: deltaPy >= 0 ? "#E8F5EC" : "#FDECEA",
-                            padding: "2px 6px", borderRadius: 4
+                            color: (invert ? deltaPy <= 0 : deltaPy >= 0) ? C.green : C.red,
+                            background: (invert ? deltaPy <= 0 : deltaPy >= 0) ? "#E8F5EC" : "#FDECEA",
+                            padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap"
                           }}>
                             {deltaPy >= 0 ? "▲" : "▼"} {pct ? fmtPct(Math.abs(deltaPy)) : fmtK(Math.abs(deltaPy))} vs PY
                           </span>
@@ -561,7 +561,15 @@ export default function App() {
                         <td style={{ padding: "11px 14px", fontWeight: 600 }}>{r.branch}</td>
                         <td style={{ padding: "11px 14px", color: C.textSub, textAlign: "right", fontSize: 11 }}>{r.latest}</td>
                         <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: "monospace" }}>{fmtK(r.rev)}</td>
-                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: "monospace" }}>{fmtK(r.cost)}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: "monospace" }}>
+                          {fmtK(r.cost)}
+                          {r.vsBudCost != null && (
+                            <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600,
+                              color: r.vsBudCost <= 0 ? C.green : C.red }}>
+                              {r.vsBudCost <= 0 ? "▼" : "▲"}{fmtK(Math.abs(r.vsBudCost))}
+                            </span>
+                          )}
+                        </td>
                         <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: "monospace" }}>
                           {fmtPct(r.gmPct)}
                           {r.budGmPct ? (
