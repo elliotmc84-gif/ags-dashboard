@@ -24,8 +24,9 @@ const fmtK = v => {
 };
 
 // Parse the dashboard Excel template
-// Actuals sheet: Branch | Month (YYYY-MM) | Revenue | Cost | GM | GM% | Current Topics
-// Budget sheet:  Branch | Month (YYYY-MM) | Revenue_Budget | Cost_Budget | GM_Budget
+// Actuals: Branch | Month | Revenue | Cost | Gross Margin | GM% | Operational Result | Current Topics
+// Budget:  Branch | Month | Revenue_Budget | Cost_Budget | Gross_Margin_Budget | Operational Result Budget
+// Prior Year: Branch | Month | Revenue_Prior Year | Fixed Costs_Prior Year | Gross_Margin_Prior Year | Operational Result Prior Year
 function parseDashboardExcel(wb) {
   const toRows = name => {
     const ws = wb.Sheets[name];
@@ -35,45 +36,62 @@ function parseDashboardExcel(wb) {
 
   const actRows = toRows("Actuals");
   const budRows = toRows("Budget");
+  const pyRows  = toRows("Prior Year");
 
   if (!actRows.length) throw new Error("No data found in the Actuals sheet.");
 
   const clean = v => (typeof v === "string" ? v.trim() : v);
 
-  const actuals = actRows.map(row => {
+  const makeGetter = (row) => {
     const keys = Object.keys(row);
-    const get = (...hints) => {
-      const k = keys.find(k => hints.some(h => k.toLowerCase().replace(/[^a-z]/g,"").includes(h.toLowerCase().replace(/[^a-z]/g,""))));
+    return (...hints) => {
+      const k = keys.find(k => hints.some(h =>
+        k.toLowerCase().replace(/[^a-z]/g,"").includes(h.toLowerCase().replace(/[^a-z]/g,""))
+      ));
       return k ? clean(row[k]) : null;
     };
-    const branch  = get("Branch");
-    const month   = get("Month");
-    const revenue = Number(get("Revenue") || 0);
-    const cost    = Number(get("Cost") || 0);
-    const gm      = Number(get("GrossMargin","Gross") || revenue - cost);
-    const topics  = get("CurrentTopics","Topics","Current") || "";
-    return { branch: String(branch||"").trim(), month: String(month||"").trim(), revenue, cost, gm, topics };
+  };
+
+  const actuals = actRows.map(row => {
+    const get = makeGetter(row);
+    const branch   = get("Branch");
+    const month    = get("Month");
+    const revenue  = Number(get("Revenue") || 0);
+    const cost     = Number(get("Cost") || 0);
+    const gm       = Number(get("GrossMargin","Gross") || revenue - cost);
+    const opResult = Number(get("OperationalResult","OpResult","Operational") || 0);
+    const topics   = get("CurrentTopics","Topics","Current") || "";
+    return { branch: String(branch||"").trim(), month: String(month||"").trim(), revenue, cost, gm, opResult, topics };
   }).filter(r => r.branch && r.month);
 
   const budget = budRows.map(row => {
-    const keys = Object.keys(row);
-    const get = (...hints) => {
-      const k = keys.find(k => hints.some(h => k.toLowerCase().replace(/[^a-z]/g,"").includes(h.toLowerCase().replace(/[^a-z]/g,""))));
-      return k ? clean(row[k]) : null;
-    };
-    const branch  = get("Branch");
-    const month   = get("Month");
-    const revenue = Number(get("RevenueBudget","Revenue") || 0);
-    const cost    = Number(get("CostBudget","Cost") || 0);
-    const gm      = Number(get("GrossMarginBudget","GrossMargin","Gross") || revenue - cost);
-    return { branch: String(branch||"").trim(), month: String(month||"").trim(), revenue, cost, gm };
+    const get = makeGetter(row);
+    const branch   = get("Branch");
+    const month    = get("Month");
+    const revenue  = Number(get("RevenueBudget","Revenue") || 0);
+    const cost     = Number(get("CostBudget","Cost") || 0);
+    const gm       = Number(get("GrossMarginBudget","GrossMargin","Gross") || revenue - cost);
+    const opResult = Number(get("OperationalResultBudget","OpResultBudget","OperationalResult","Operational") || 0);
+    return { branch: String(branch||"").trim(), month: String(month||"").trim(), revenue, cost, gm, opResult };
   }).filter(r => r.branch && r.month);
 
-  return { actuals, budget };
+  const priorYear = pyRows.map(row => {
+    const get = makeGetter(row);
+    const branch   = get("Branch");
+    const month    = get("Month");
+    const revenue  = Number(get("RevenuePrior","Revenue") || 0);
+    const cost     = Number(get("FixedCostsPrior","CostPrior","Cost") || 0);
+    const gm       = Number(get("GrossMarginPrior","GrossPrior","Gross") || revenue - cost);
+    const opResult = Number(get("OperationalResultPrior","OpResultPrior","OperationalResult","Operational") || 0);
+    return { branch: String(branch||"").trim(), month: String(month||"").trim(), revenue, cost, gm, opResult };
+  }).filter(r => r.branch && r.month);
+
+  return { actuals, budget, priorYear };
 }
 
-function KpiCard({ label, value, sub, delta }) {
-  const up = delta >= 0;
+function KpiCard({ label, value, sub, sub2, delta, deltaPy, pct }) {
+  const up   = delta >= 0;
+  const upPy = deltaPy >= 0;
   return (
     <div style={{
       background: C.surface, border: `1px solid ${C.border}`,
@@ -86,17 +104,29 @@ function KpiCard({ label, value, sub, delta }) {
         {value}
       </div>
       {sub && <div style={{ color: C.textSub, fontSize: 11, marginTop: 3 }}>{sub}</div>}
+      {sub2 && <div style={{ color: C.textSub, fontSize: 11, marginTop: 1 }}>{sub2}</div>}
       {delta != null && (
-        <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 4 }}>
+        <div style={{ marginTop: 6 }}>
           <span style={{
             fontSize: 11, fontWeight: 600,
             color: up ? C.green : C.red,
             background: up ? "#1a3323" : "#3d1a1a",
             padding: "2px 6px", borderRadius: 4
           }}>
-            {up ? "▲" : "▼"} {fmtK(Math.abs(delta))}
+            {up ? "▲" : "▼"} {pct ? fmtPct(Math.abs(delta)) : fmtK(Math.abs(delta))} vs bud
           </span>
-          <span style={{ color: C.textSub, fontSize: 10 }}>vs budget</span>
+        </div>
+      )}
+      {deltaPy != null && (
+        <div style={{ marginTop: 4 }}>
+          <span style={{
+            fontSize: 11, fontWeight: 600,
+            color: upPy ? C.green : C.red,
+            background: upPy ? "#1a3323" : "#3d1a1a",
+            padding: "2px 6px", borderRadius: 4
+          }}>
+            {upPy ? "▲" : "▼"} {pct ? fmtPct(Math.abs(deltaPy)) : fmtK(Math.abs(deltaPy))} vs PY
+          </span>
         </div>
       )}
     </div>
@@ -174,14 +204,13 @@ export default function App() {
     if (!data || !branch) return null;
     const actRows = data.actuals.filter(r => r.branch === branch);
     const budRows = data.budget.filter(r => r.branch === branch);
+    const pyRows  = (data.priorYear || []).filter(r => r.branch === branch);
 
     const months = actRows.map(r => r.month).sort();
     const latestMonth = months[months.length - 1] || "";
     const currentYear = latestMonth.slice(0, 4) || String(new Date().getFullYear());
-    const priorYear   = String(Number(currentYear) - 1);
 
     const cyRows = actRows.filter(r => r.month.startsWith(currentYear));
-    const pyRows = actRows.filter(r => r.month.startsWith(priorYear));
     const cyBud  = budRows.filter(r => r.month.startsWith(currentYear));
 
     const sum = (rows, key) => rows.reduce((acc, r) => acc + (Number(r[key]) || 0), 0);
@@ -190,25 +219,25 @@ export default function App() {
       revenue: sum(cyRows, "revenue"),
       cost:    sum(cyRows, "cost"),
       gm:      sum(cyRows, "gm"),
+      opResult: sum(cyRows, "opResult"),
     };
     ytd.gmPct = ytd.revenue ? ytd.gm / ytd.revenue : 0;
 
-    const bud = { revenue: sum(cyBud, "revenue"), gm: sum(cyBud, "gm") };
-    const py  = { revenue: sum(pyRows, "revenue"), gm: sum(pyRows, "gm") };
+    const bud = { revenue: sum(cyBud, "revenue"), gm: sum(cyBud, "gm"), opResult: sum(cyBud, "opResult") };
+    bud.gmPct = bud.revenue ? bud.gm / bud.revenue : 0;
+    const py  = { revenue: sum(pyRows, "revenue"), cost: sum(pyRows, "cost"), gm: sum(pyRows, "gm"), opResult: sum(pyRows, "opResult") };
+    py.gmPct  = py.revenue ? py.gm / py.revenue : 0;
 
     const monthMap = {};
     cyRows.forEach(r => {
-      monthMap[r.month] = {
-        ...monthMap[r.month],
-        actual: r.gm, actualRev: r.revenue, actualCost: r.cost,
-        topics: r.topics
-      };
+      monthMap[r.month] = { ...monthMap[r.month], actual: r.gm, actualRev: r.revenue, actualCost: r.cost, topics: r.topics };
     });
     cyBud.forEach(r => {
       monthMap[r.month] = { ...monthMap[r.month], budget: r.gm, budgetRev: r.revenue };
     });
     pyRows.forEach(r => {
-      const key = currentYear + r.month.slice(4);
+      // PY rows use same month format; map them to current year for charting
+      const key = currentYear + "-" + r.month.slice(5);
       monthMap[key] = { ...monthMap[key], py: r.gm, pyRev: r.revenue };
     });
 
@@ -229,18 +258,60 @@ export default function App() {
     return allBranches.map(b => {
       const actRows = data.actuals.filter(r => r.branch === b);
       const budRows = data.budget.filter(r => r.branch === b);
+      const pyRows  = (data.priorYear || []).filter(r => r.branch === b);
       const months = actRows.map(r => r.month).sort();
       const latest = months[months.length - 1] || "";
       const currentYear = latest.slice(0, 4);
-      const cyRows = actRows.filter(r => r.month.startsWith(currentYear));
-      const cyBud  = budRows.filter(r => r.month.startsWith(currentYear));
+      const cyRows  = actRows.filter(r => r.month.startsWith(currentYear));
+      const cyBud   = budRows.filter(r => r.month.startsWith(currentYear));
       const sum = (rows, key) => rows.reduce((acc, r) => acc + (Number(r[key]) || 0), 0);
-      const rev = sum(cyRows, "revenue");
-      const gm  = sum(cyRows, "gm");
-      const bud = sum(cyBud, "revenue");
-      return { branch: b, latest, rev, gm, gmPct: rev ? gm / rev : 0, vsBud: bud ? rev - bud : null };
+      const rev     = sum(cyRows, "revenue");
+      const gm      = sum(cyRows, "gm");
+      const cost    = sum(cyRows, "cost");
+      const budRev  = sum(cyBud, "revenue");
+      const budGm   = sum(cyBud, "gm");
+      const budCost = sum(cyBud, "cost");
+      const budGmPct = budRev ? budGm / budRev : 0;
+      const pyRev   = sum(pyRows, "revenue");
+      const pyGm    = sum(pyRows, "gm");
+      const pyCost  = sum(pyRows, "cost");
+      const opResult    = sum(cyRows, "opResult");
+      const opResultBud = sum(cyBud,  "opResult");
+      const opResultPy  = sum(pyRows, "opResult");
+      return {
+        branch: b, latest, rev, gm, gmPct: rev ? gm / rev : 0, budGmPct, cost, budCost, pyCost,
+        vsBudRev: budRev ? rev - budRev : null,
+        vsBudGm:  budGm  ? gm  - budGm  : null,
+        vsBudCost: budCost ? cost - budCost : null,
+        pyRev, pyGm, vsPyRev: pyRev ? rev - pyRev : null, vsPyCost: pyCost ? cost - pyCost : null,
+        opResult, opResultBud, opResultPy,
+      };
     });
   }, [data, allBranches]);
+
+  const regionalTotals = useMemo(() => {
+    if (!overviewRows.length) return null;
+    const sum = key => overviewRows.reduce((acc, r) => acc + (r[key] || 0), 0);
+    const rev  = sum("rev");
+    const gm   = sum("gm");
+    const cost = sum("cost");
+    const budRev  = overviewRows.reduce((acc, r) => acc + (r.vsBudRev != null ? r.rev - r.vsBudRev : 0), 0);
+    const budGm   = overviewRows.reduce((acc, r) => acc + (r.vsBudGm  != null ? r.gm  - r.vsBudGm  : 0), 0);
+    const budCost = overviewRows.reduce((acc, r) => acc + (r.vsBudCost != null ? r.cost - r.vsBudCost : 0), 0);
+    const budGmPct = budRev ? budGm / budRev : 0;
+    const pyRev = sum("pyRev"), pyGm = sum("pyGm"), pyCost = sum("pyCost");
+    const pyGmPct  = pyRev ? pyGm / pyRev : 0;
+    const periods = [...new Set(overviewRows.map(r => r.latest))].sort();
+    return {
+      rev, gm, gmPct: rev ? gm / rev : 0, budGmPct, pyGmPct, cost, budCost,
+      vsBudRev:  overviewRows.some(r => r.vsBudRev  != null) ? sum("vsBudRev")  : null,
+      vsBudCost: overviewRows.some(r => r.vsBudCost != null) ? sum("vsBudCost") : null,
+      pyRev, pyGm, pyCost,
+      opResult: sum("opResult"), opResultBud: sum("opResultBud"), opResultPy: sum("opResultPy"),
+      periodRange: periods.length > 1 ? `${periods[0]} – ${periods[periods.length-1]}` : periods[0] || "",
+      branchCount: overviewRows.length,
+    };
+  }, [overviewRows]);
 
   const metricKeys = metric === "gm" ? ["actual","budget","py"]
     : metric === "revenue" ? ["actualRev","budgetRev","pyRev"]
@@ -342,42 +413,153 @@ export default function App() {
 
         {/* Overview */}
         {data && view === "overview" && (
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Network overview</div>
-            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                    {["Branch","Latest","Revenue YTD","GM YTD","GM %","vs Budget"].map(h => (
-                      <th key={h} style={{
-                        padding: "12px 16px", color: C.textSub, fontWeight: 600,
-                        textAlign: h === "Branch" ? "left" : "right",
-                        fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em"
-                      }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {overviewRows.map((r, i) => (
-                    <tr key={r.branch} className="row-hover" onClick={() => selectBranch(r.branch)}
-                      style={{ borderBottom: i < overviewRows.length - 1 ? `1px solid ${C.border}` : "none", background: "transparent", transition: "background 0.15s" }}>
-                      <td style={{ padding: "12px 16px", fontWeight: 600 }}>{r.branch}</td>
-                      <td style={{ padding: "12px 16px", color: C.textSub, textAlign: "right" }}>{r.latest}</td>
-                      <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: "monospace" }}>{fmtK(r.rev)}</td>
-                      <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: "monospace" }}>{fmtK(r.gm)}</td>
-                      <td style={{ padding: "12px 16px", textAlign: "right", fontFamily: "monospace" }}>{fmtPct(r.gmPct)}</td>
-                      <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                        {r.vsBud != null && (
-                          <span style={{ color: r.vsBud >= 0 ? C.green : C.red, fontFamily: "monospace", fontWeight: 600 }}>
-                            {r.vsBud >= 0 ? "▲" : "▼"} {fmtK(Math.abs(r.vsBud))}
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+            {/* Regional totals */}
+            {regionalTotals && (
+              <div style={{ background: C.surface, border: `1px solid ${C.accent}`, borderRadius: 12, padding: "20px 20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16, flexWrap: "wrap", gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>Europe — Regional Total</div>
+                  <div style={{ fontSize: 11, color: C.amber }}>
+                    ⚠ Periods vary by branch: {regionalTotals.periodRange}
+                  </div>
+                </div>
+
+                {/* Revenue + Fixed Cost + GM% row */}
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                  {[
+                    { label: "Revenue YTD",   value: fmtK(regionalTotals.rev),  delta: regionalTotals.vsBudRev,  deltaPy: regionalTotals.pyRev  ? regionalTotals.rev  - regionalTotals.pyRev  : null, sub: regionalTotals.pyRev  ? `PY: ${fmtK(regionalTotals.pyRev)}`   : null, pct: false },
+                    { label: "Fixed Cost YTD",value: fmtK(regionalTotals.cost), delta: regionalTotals.vsBudCost, deltaPy: regionalTotals.pyCost ? regionalTotals.cost - regionalTotals.pyCost : null, sub: regionalTotals.pyCost ? `PY: ${fmtK(regionalTotals.pyCost)}`  : null, pct: false },
+                    { label: "GM %", value: fmtPct(regionalTotals.gmPct), delta: regionalTotals.budGmPct ? regionalTotals.gmPct - regionalTotals.budGmPct : null, deltaPy: regionalTotals.pyGmPct ? regionalTotals.gmPct - regionalTotals.pyGmPct : null, sub: regionalTotals.budGmPct ? `Budget: ${fmtPct(regionalTotals.budGmPct)}` : null, pct: true },
+                  ].map(({ label, value, delta, deltaPy, sub, pct }) => (
+                    <div key={label} style={{
+                      flex: 1, minWidth: 130, background: C.bg,
+                      border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px"
+                    }}>
+                      <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>{label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "monospace", color: C.text }}>{value}</div>
+                      {sub && <div style={{ color: C.textSub, fontSize: 11, marginTop: 3 }}>{sub}</div>}
+                      {delta != null && (
+                        <div style={{ marginTop: 5 }}>
+                          <span style={{
+                            fontSize: 11, fontWeight: 600,
+                            color: delta >= 0 ? C.green : C.red,
+                            background: delta >= 0 ? "#1a3323" : "#3d1a1a",
+                            padding: "2px 6px", borderRadius: 4
+                          }}>
+                            {delta >= 0 ? "▲" : "▼"} {pct ? fmtPct(Math.abs(delta)) : fmtK(Math.abs(delta))} vs bud
                           </span>
-                        )}
-                      </td>
-                    </tr>
+                        </div>
+                      )}
+                      {deltaPy != null && (
+                        <div style={{ marginTop: 4 }}>
+                          <span style={{
+                            fontSize: 11, fontWeight: 600,
+                            color: deltaPy >= 0 ? C.green : C.red,
+                            background: deltaPy >= 0 ? "#1a3323" : "#3d1a1a",
+                            padding: "2px 6px", borderRadius: 4
+                          }}>
+                            {deltaPy >= 0 ? "▲" : "▼"} {pct ? fmtPct(Math.abs(deltaPy)) : fmtK(Math.abs(deltaPy))} vs PY
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+
+                {/* Operational result row */}
+                <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px" }}>
+                  <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12 }}>Operational Result</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                    {/* Col 1: Actual */}
+                    <div>
+                      <div style={{ color: C.textSub, fontSize: 10, marginBottom: 4 }}>Actual YTD</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResult >= 0 ? C.green : C.red }}>{fmtK(regionalTotals.opResult)}</div>
+                    </div>
+                    {/* Col 2: Budget + vs Budget */}
+                    <div>
+                      <div style={{ color: C.textSub, fontSize: 10, marginBottom: 4 }}>Budget YTD</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResultBud >= 0 ? C.green : C.red, marginBottom: 8 }}>{fmtK(regionalTotals.opResultBud)}</div>
+                      <span style={{
+                        fontSize: 11, fontWeight: 600, fontFamily: "monospace",
+                        color: regionalTotals.opResult >= regionalTotals.opResultBud ? C.green : C.red,
+                        background: regionalTotals.opResult >= regionalTotals.opResultBud ? "#1a3323" : "#3d1a1a",
+                        padding: "2px 7px", borderRadius: 4
+                      }}>
+                        {regionalTotals.opResult >= regionalTotals.opResultBud ? "▲" : "▼"} {fmtK(Math.abs(regionalTotals.opResult - regionalTotals.opResultBud))} vs bud
+                      </span>
+                    </div>
+                    {/* Col 3: Prior Year + vs PY */}
+                    <div>
+                      <div style={{ color: C.textSub, fontSize: 10, marginBottom: 4 }}>Prior Year YTD</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResultPy >= 0 ? C.green : C.red, marginBottom: 8 }}>{fmtK(regionalTotals.opResultPy)}</div>
+                      <span style={{
+                        fontSize: 11, fontWeight: 600, fontFamily: "monospace",
+                        color: regionalTotals.opResult >= regionalTotals.opResultPy ? C.green : C.red,
+                        background: regionalTotals.opResult >= regionalTotals.opResultPy ? "#1a3323" : "#3d1a1a",
+                        padding: "2px 7px", borderRadius: 4
+                      }}>
+                        {regionalTotals.opResult >= regionalTotals.opResultPy ? "▲" : "▼"} {fmtK(Math.abs(regionalTotals.opResult - regionalTotals.opResultPy))} vs PY
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Branch table */}
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13, color: C.textSub, marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Branch breakdown — click to open
+              </div>
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                      {["Branch","Period","Revenue YTD","Fixed Cost","GM %","vs Rev Budget","Op Result"].map(h => (
+                        <th key={h} style={{
+                          padding: "11px 14px", color: C.textSub, fontWeight: 600,
+                          textAlign: h === "Branch" ? "left" : "right",
+                          fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em"
+                        }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {overviewRows.map((r, i) => (
+                      <tr key={r.branch} className="row-hover" onClick={() => selectBranch(r.branch)}
+                        style={{ borderBottom: i < overviewRows.length - 1 ? `1px solid ${C.border}` : "none", background: "transparent", transition: "background 0.15s" }}>
+                        <td style={{ padding: "11px 14px", fontWeight: 600 }}>{r.branch}</td>
+                        <td style={{ padding: "11px 14px", color: C.textSub, textAlign: "right", fontSize: 11 }}>{r.latest}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: "monospace" }}>{fmtK(r.rev)}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: "monospace" }}>{fmtK(r.cost)}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: "monospace" }}>
+                          {fmtPct(r.gmPct)}
+                          {r.budGmPct ? (
+                            <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600,
+                              color: r.gmPct >= r.budGmPct ? C.green : C.red }}>
+                              {r.gmPct >= r.budGmPct ? "▲" : "▼"}{fmtPct(Math.abs(r.gmPct - r.budGmPct))}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td style={{ padding: "11px 14px", textAlign: "right" }}>
+                          {r.vsBudRev != null && (
+                            <span style={{ color: r.vsBudRev >= 0 ? C.green : C.red, fontFamily: "monospace", fontWeight: 600 }}>
+                              {r.vsBudRev >= 0 ? "▲" : "▼"} {fmtK(Math.abs(r.vsBudRev))}
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", fontFamily: "monospace",
+                          color: r.opResult >= 0 ? C.green : C.red, fontWeight: 600 }}>
+                          {fmtK(r.opResult)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
+
           </div>
         )}
 
@@ -432,17 +614,20 @@ export default function App() {
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <KpiCard label="Revenue YTD" value={fmtK(dashboard.ytd.revenue)}
                     sub={dashboard.bud.revenue ? `Budget: ${fmtK(dashboard.bud.revenue)}` : null}
-                    delta={dashboard.bud.revenue ? dashboard.ytd.revenue - dashboard.bud.revenue : null} />
+                    sub2={dashboard.py.revenue ? `PY: ${fmtK(dashboard.py.revenue)}` : null}
+                    delta={dashboard.bud.revenue ? dashboard.ytd.revenue - dashboard.bud.revenue : null}
+                    deltaPy={dashboard.py.revenue ? dashboard.ytd.revenue - dashboard.py.revenue : null} />
                   <KpiCard label="Gross Margin" value={fmtK(dashboard.ytd.gm)}
                     sub={dashboard.bud.gm ? `Budget: ${fmtK(dashboard.bud.gm)}` : null}
-                    delta={dashboard.bud.gm ? dashboard.ytd.gm - dashboard.bud.gm : null} />
-                  <KpiCard label="GM %" value={fmtPct(dashboard.ytd.gmPct)} />
-                  {dashboard.py.revenue > 0 && (
-                    <KpiCard label="Revenue vs PY"
-                      value={fmtK(dashboard.ytd.revenue - dashboard.py.revenue)}
-                      sub={`PY: ${fmtK(dashboard.py.revenue)}`}
-                      delta={dashboard.ytd.revenue - dashboard.py.revenue} />
-                  )}
+                    sub2={dashboard.py.gm ? `PY: ${fmtK(dashboard.py.gm)}` : null}
+                    delta={dashboard.bud.gm ? dashboard.ytd.gm - dashboard.bud.gm : null}
+                    deltaPy={dashboard.py.gm ? dashboard.ytd.gm - dashboard.py.gm : null} />
+                  <KpiCard label="GM %" value={fmtPct(dashboard.ytd.gmPct)}
+                    sub={dashboard.bud.gmPct ? `Budget: ${fmtPct(dashboard.bud.gmPct)}` : null}
+                    sub2={dashboard.py.gmPct ? `PY: ${fmtPct(dashboard.py.gmPct)}` : null}
+                    delta={dashboard.bud.gmPct ? dashboard.ytd.gmPct - dashboard.bud.gmPct : null}
+                    deltaPy={dashboard.py.gmPct ? dashboard.ytd.gmPct - dashboard.py.gmPct : null}
+                    pct={true} />
                 </div>
 
                 {dashboard.chartData.length > 1 && (
@@ -482,6 +667,50 @@ export default function App() {
                     </ResponsiveContainer>
                   </div>
                 )}
+
+                {/* P&L Result */}
+                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 16px" }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 16 }}>Operational result</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                    {/* Col 1: Actual */}
+                    <div>
+                      <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Actual YTD</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: dashboard.ytd.opResult >= 0 ? C.green : C.red }}>
+                        {fmtK(dashboard.ytd.opResult)}
+                      </div>
+                    </div>
+                    {/* Col 2: Budget + vs Budget */}
+                    <div>
+                      <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Budget YTD</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: dashboard.bud.opResult >= 0 ? C.green : C.red, marginBottom: 8 }}>
+                        {fmtK(dashboard.bud.opResult)}
+                      </div>
+                      <span style={{
+                        fontSize: 11, fontWeight: 600, fontFamily: "monospace",
+                        color: dashboard.ytd.opResult >= dashboard.bud.opResult ? C.green : C.red,
+                        background: dashboard.ytd.opResult >= dashboard.bud.opResult ? "#1a3323" : "#3d1a1a",
+                        padding: "2px 7px", borderRadius: 4
+                      }}>
+                        {dashboard.ytd.opResult >= dashboard.bud.opResult ? "▲" : "▼"} {fmtK(Math.abs(dashboard.ytd.opResult - dashboard.bud.opResult))} vs bud
+                      </span>
+                    </div>
+                    {/* Col 3: Prior Year + vs PY */}
+                    <div>
+                      <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Prior Year YTD</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: dashboard.py.opResult >= 0 ? C.green : C.red, marginBottom: 8 }}>
+                        {fmtK(dashboard.py.opResult)}
+                      </div>
+                      <span style={{
+                        fontSize: 11, fontWeight: 600, fontFamily: "monospace",
+                        color: dashboard.ytd.opResult >= dashboard.py.opResult ? C.green : C.red,
+                        background: dashboard.ytd.opResult >= dashboard.py.opResult ? "#1a3323" : "#3d1a1a",
+                        padding: "2px 7px", borderRadius: 4
+                      }}>
+                        {dashboard.ytd.opResult >= dashboard.py.opResult ? "▲" : "▼"} {fmtK(Math.abs(dashboard.ytd.opResult - dashboard.py.opResult))} vs PY
+                      </span>
+                    </div>
+                  </div>
+                </div>
 
                 {dashboard.topics.length > 0 && (
                   <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 16px" }}>
