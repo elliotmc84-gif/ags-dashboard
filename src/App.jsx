@@ -6,11 +6,12 @@ import {
 } from "recharts";
 
 const C = {
-  bg: "#0D1117", surface: "#161B22", border: "#21262D",
-  accent: "#2563EB", accentLt: "#3B82F6",
-  text: "#E6EDF3", textSub: "#8B949E",
-  green: "#3FB950", red: "#F85149", amber: "#D29922",
-  actual: "#3B82F6", budget: "#8B5CF6", py: "#F59E0B",
+  bg: "#F5F5F5", surface: "#FFFFFF", border: "#E0E0E0",
+  accent: "#A51C30", accentLt: "#C0392B",
+  text: "#1A1A1A", textSub: "#666666",
+  green: "#1A7A3A", red: "#A51C30", amber: "#B45309",
+  greenBg: "#E8F5EC", redBg: "#FDECEA",
+  actual: "#A51C30", budget: "#4A4A8A", py: "#B45309",
 };
 
 const fmtPct = v => v == null ? "—" : (v * 100).toFixed(1) + "%";
@@ -110,7 +111,7 @@ function KpiCard({ label, value, sub, sub2, delta, deltaPy, pct }) {
           <span style={{
             fontSize: 11, fontWeight: 600,
             color: up ? C.green : C.red,
-            background: up ? "#1a3323" : "#3d1a1a",
+            background: up ? "#E8F5EC" : "#FDECEA",
             padding: "2px 6px", borderRadius: 4
           }}>
             {up ? "▲" : "▼"} {pct ? fmtPct(Math.abs(delta)) : fmtK(Math.abs(delta))} vs bud
@@ -122,7 +123,7 @@ function KpiCard({ label, value, sub, sub2, delta, deltaPy, pct }) {
           <span style={{
             fontSize: 11, fontWeight: 600,
             color: upPy ? C.green : C.red,
-            background: upPy ? "#1a3323" : "#3d1a1a",
+            background: upPy ? "#E8F5EC" : "#FDECEA",
             padding: "2px 6px", borderRadius: 4
           }}>
             {upPy ? "▲" : "▼"} {pct ? fmtPct(Math.abs(deltaPy)) : fmtK(Math.abs(deltaPy))} vs PY
@@ -151,9 +152,28 @@ function ChartTooltip({ active, payload, label }) {
   );
 }
 
+const STORAGE_KEY = "ags-dashboard-data-v1";
+
+function saveToStorage(data, fileName) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, fileName }));
+  } catch (e) {
+    console.warn("Could not save to localStorage", e);
+  }
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+
 export default function App() {
-  const [data, setData]         = useState(null);
-  const [fileName, setFileName] = useState(null);
+  const stored = loadFromStorage();
+  const [data, setData]         = useState(stored?.data || null);
+  const [fileName, setFileName] = useState(stored?.fileName || null);
   const [query, setQuery]       = useState("");
   const [branch, setBranch]     = useState(null);
   const [suggestions, setSugg]  = useState([]);
@@ -170,6 +190,7 @@ export default function App() {
       const parsed = parseDashboardExcel(wb);
       setData(parsed);
       setFileName(file.name);
+      saveToStorage(parsed, file.name);
       setBranch(null);
       setQuery("");
     } catch (e) {
@@ -321,21 +342,23 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'Segoe UI',sans-serif", paddingBottom: 80 }}>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; }
+        body { background: #F5F5F5; }
         input { outline: none; }
-        .sugg:hover { background: #21262D !important; cursor: pointer; }
+        .sugg:hover { background: #F0F0F0 !important; cursor: pointer; }
         .chip:hover { background: ${C.accent} !important; color: #fff !important; cursor: pointer; }
-        .row-hover:hover { background: #1c2128 !important; cursor: pointer; }
+        .row-hover:hover { background: #F9F9F9 !important; cursor: pointer; }
         .mbtn:hover { opacity: 0.8; }
       `}</style>
 
       {/* Header */}
       <div style={{
-        background: C.surface, borderBottom: `1px solid ${C.border}`,
+        background: C.surface, borderBottom: `3px solid ${C.accent}`,
         padding: "14px 20px", display: "flex", alignItems: "center", gap: 14,
-        position: "sticky", top: 0, zIndex: 100
+        position: "sticky", top: 0, zIndex: 100, boxShadow: "0 1px 4px rgba(0,0,0,0.08)"
       }}>
-        <div style={{ width: 6, height: 28, background: C.accent, borderRadius: 3, flexShrink: 0 }} />
+        <div style={{ width: 4, height: 28, background: C.accent, borderRadius: 2, flexShrink: 0 }} />
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 700 }}>AGS Network</div>
           <div style={{ fontSize: 10, color: C.textSub, letterSpacing: "0.06em", textTransform: "uppercase" }}>Branch Dashboard</div>
@@ -395,7 +418,7 @@ export default function App() {
 
         {error && (
           <div style={{
-            marginTop: 12, background: "#3d1a1a", border: `1px solid ${C.red}`,
+            marginTop: 12, background: "#FDECEA", border: `1px solid ${C.red}`,
             borderRadius: 8, padding: "12px 16px", color: C.red, fontSize: 13
           }}>{error}</div>
         )}
@@ -417,7 +440,7 @@ export default function App() {
 
             {/* Regional totals */}
             {regionalTotals && (
-              <div style={{ background: C.surface, border: `1px solid ${C.accent}`, borderRadius: 12, padding: "20px 20px" }}>
+              <div style={{ background: C.surface, border: `2px solid ${C.accent}`, borderRadius: 12, padding: "20px 20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16, flexWrap: "wrap", gap: 6 }}>
                   <div style={{ fontWeight: 700, fontSize: 15 }}>Europe — Regional Total</div>
                   <div style={{ fontSize: 11, color: C.amber }}>
@@ -444,7 +467,7 @@ export default function App() {
                           <span style={{
                             fontSize: 11, fontWeight: 600,
                             color: delta >= 0 ? C.green : C.red,
-                            background: delta >= 0 ? "#1a3323" : "#3d1a1a",
+                            background: delta >= 0 ? "#E8F5EC" : "#FDECEA",
                             padding: "2px 6px", borderRadius: 4
                           }}>
                             {delta >= 0 ? "▲" : "▼"} {pct ? fmtPct(Math.abs(delta)) : fmtK(Math.abs(delta))} vs bud
@@ -456,7 +479,7 @@ export default function App() {
                           <span style={{
                             fontSize: 11, fontWeight: 600,
                             color: deltaPy >= 0 ? C.green : C.red,
-                            background: deltaPy >= 0 ? "#1a3323" : "#3d1a1a",
+                            background: deltaPy >= 0 ? "#E8F5EC" : "#FDECEA",
                             padding: "2px 6px", borderRadius: 4
                           }}>
                             {deltaPy >= 0 ? "▲" : "▼"} {pct ? fmtPct(Math.abs(deltaPy)) : fmtK(Math.abs(deltaPy))} vs PY
@@ -470,34 +493,40 @@ export default function App() {
                 {/* Operational result row */}
                 <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px" }}>
                   <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 12 }}>Operational Result</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-                    {/* Col 1: Actual */}
-                    <div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {/* Actual */}
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", flex: 1, minWidth: 120 }}>
                       <div style={{ color: C.textSub, fontSize: 10, marginBottom: 4 }}>Actual YTD</div>
-                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResult >= 0 ? C.green : C.red }}>{fmtK(regionalTotals.opResult)}</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResult >= 0 ? C.green : C.red }}>
+                        {fmtK(regionalTotals.opResult)}
+                      </div>
                     </div>
-                    {/* Col 2: Budget + vs Budget */}
-                    <div>
+                    {/* Budget */}
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", flex: 1, minWidth: 120 }}>
                       <div style={{ color: C.textSub, fontSize: 10, marginBottom: 4 }}>Budget YTD</div>
-                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResultBud >= 0 ? C.green : C.red, marginBottom: 8 }}>{fmtK(regionalTotals.opResultBud)}</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResultBud >= 0 ? C.green : C.red, marginBottom: 8 }}>
+                        {fmtK(regionalTotals.opResultBud)}
+                      </div>
                       <span style={{
                         fontSize: 11, fontWeight: 600, fontFamily: "monospace",
                         color: regionalTotals.opResult >= regionalTotals.opResultBud ? C.green : C.red,
-                        background: regionalTotals.opResult >= regionalTotals.opResultBud ? "#1a3323" : "#3d1a1a",
-                        padding: "2px 7px", borderRadius: 4
+                        background: regionalTotals.opResult >= regionalTotals.opResultBud ? "#E8F5EC" : "#FDECEA",
+                        padding: "2px 7px", borderRadius: 4, whiteSpace: "nowrap"
                       }}>
                         {regionalTotals.opResult >= regionalTotals.opResultBud ? "▲" : "▼"} {fmtK(Math.abs(regionalTotals.opResult - regionalTotals.opResultBud))} vs bud
                       </span>
                     </div>
-                    {/* Col 3: Prior Year + vs PY */}
-                    <div>
+                    {/* Prior Year */}
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 14px", flex: 1, minWidth: 120 }}>
                       <div style={{ color: C.textSub, fontSize: 10, marginBottom: 4 }}>Prior Year YTD</div>
-                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResultPy >= 0 ? C.green : C.red, marginBottom: 8 }}>{fmtK(regionalTotals.opResultPy)}</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "monospace", color: regionalTotals.opResultPy >= 0 ? C.green : C.red, marginBottom: 8 }}>
+                        {fmtK(regionalTotals.opResultPy)}
+                      </div>
                       <span style={{
                         fontSize: 11, fontWeight: 600, fontFamily: "monospace",
                         color: regionalTotals.opResult >= regionalTotals.opResultPy ? C.green : C.red,
-                        background: regionalTotals.opResult >= regionalTotals.opResultPy ? "#1a3323" : "#3d1a1a",
-                        padding: "2px 7px", borderRadius: 4
+                        background: regionalTotals.opResult >= regionalTotals.opResultPy ? "#E8F5EC" : "#FDECEA",
+                        padding: "2px 7px", borderRadius: 4, whiteSpace: "nowrap"
                       }}>
                         {regionalTotals.opResult >= regionalTotals.opResultPy ? "▲" : "▼"} {fmtK(Math.abs(regionalTotals.opResult - regionalTotals.opResultPy))} vs PY
                       </span>
@@ -572,7 +601,7 @@ export default function App() {
                 style={{
                   width: "100%", padding: "12px 14px 12px 36px",
                   background: C.surface, border: `1px solid ${branch ? C.accent : C.border}`,
-                  borderRadius: 10, color: C.text, fontSize: 15,
+                  borderRadius: 10, color: C.text, fontSize: 15, fontFamily: "inherit",
                 }} />
               {suggestions.length > 0 && (
                 <div style={{
@@ -671,16 +700,16 @@ export default function App() {
                 {/* P&L Result */}
                 <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 16px" }}>
                   <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 16 }}>Operational result</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-                    {/* Col 1: Actual */}
-                    <div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {/* Actual */}
+                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px", flex: 1, minWidth: 130 }}>
                       <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Actual YTD</div>
                       <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: dashboard.ytd.opResult >= 0 ? C.green : C.red }}>
                         {fmtK(dashboard.ytd.opResult)}
                       </div>
                     </div>
-                    {/* Col 2: Budget + vs Budget */}
-                    <div>
+                    {/* Budget */}
+                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px", flex: 1, minWidth: 130 }}>
                       <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Budget YTD</div>
                       <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: dashboard.bud.opResult >= 0 ? C.green : C.red, marginBottom: 8 }}>
                         {fmtK(dashboard.bud.opResult)}
@@ -688,14 +717,14 @@ export default function App() {
                       <span style={{
                         fontSize: 11, fontWeight: 600, fontFamily: "monospace",
                         color: dashboard.ytd.opResult >= dashboard.bud.opResult ? C.green : C.red,
-                        background: dashboard.ytd.opResult >= dashboard.bud.opResult ? "#1a3323" : "#3d1a1a",
-                        padding: "2px 7px", borderRadius: 4
+                        background: dashboard.ytd.opResult >= dashboard.bud.opResult ? "#E8F5EC" : "#FDECEA",
+                        padding: "2px 7px", borderRadius: 4, whiteSpace: "nowrap"
                       }}>
                         {dashboard.ytd.opResult >= dashboard.bud.opResult ? "▲" : "▼"} {fmtK(Math.abs(dashboard.ytd.opResult - dashboard.bud.opResult))} vs bud
                       </span>
                     </div>
-                    {/* Col 3: Prior Year + vs PY */}
-                    <div>
+                    {/* Prior Year */}
+                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: "14px 16px", flex: 1, minWidth: 130 }}>
                       <div style={{ color: C.textSub, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>Prior Year YTD</div>
                       <div style={{ fontSize: 18, fontWeight: 700, fontFamily: "monospace", color: dashboard.py.opResult >= 0 ? C.green : C.red, marginBottom: 8 }}>
                         {fmtK(dashboard.py.opResult)}
@@ -703,8 +732,8 @@ export default function App() {
                       <span style={{
                         fontSize: 11, fontWeight: 600, fontFamily: "monospace",
                         color: dashboard.ytd.opResult >= dashboard.py.opResult ? C.green : C.red,
-                        background: dashboard.ytd.opResult >= dashboard.py.opResult ? "#1a3323" : "#3d1a1a",
-                        padding: "2px 7px", borderRadius: 4
+                        background: dashboard.ytd.opResult >= dashboard.py.opResult ? "#E8F5EC" : "#FDECEA",
+                        padding: "2px 7px", borderRadius: 4, whiteSpace: "nowrap"
                       }}>
                         {dashboard.ytd.opResult >= dashboard.py.opResult ? "▲" : "▼"} {fmtK(Math.abs(dashboard.ytd.opResult - dashboard.py.opResult))} vs PY
                       </span>
